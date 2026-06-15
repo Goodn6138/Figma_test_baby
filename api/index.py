@@ -14,8 +14,6 @@ app = Flask(__name__)
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin')
-    # Figma plugin iframe sends Origin: null
-    # Figma Site sends the actual domain
     allowed_origins = [
         'null',
         'https://www.figma.com',
@@ -74,7 +72,7 @@ def init_db():
         cur = conn.cursor()
 
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE IF NOT EXISTS MUWES_TABLE (
                 id SERIAL PRIMARY KEY,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
@@ -85,7 +83,7 @@ def init_db():
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES MUWES_TABLE(id) ON DELETE CASCADE,
                 title VARCHAR(255) NOT NULL,
                 description TEXT,
                 figma_file_key VARCHAR(255),
@@ -141,13 +139,13 @@ def register():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        cur.execute("SELECT id FROM MUWES_TABLE WHERE email = %s", (email,))
         if cur.fetchone():
             return jsonify({"error": "User exists"}), 409
 
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         cur.execute(
-            "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
+            "INSERT INTO MUWES_TABLE (email, password_hash) VALUES (%s, %s) RETURNING id",
             (email, hashed)
         )
         user_id = cur.fetchone()[0]
@@ -171,7 +169,7 @@ def login():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, password_hash FROM users WHERE email = %s", (email,))
+        cur.execute("SELECT id, password_hash FROM MUWES_TABLE WHERE email = %s", (email,))
         row = cur.fetchone()
         if not row or not bcrypt.checkpw(password.encode(), row[1].encode()):
             return jsonify({"error": "Invalid credentials"}), 401
