@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2.pool
+import psycopg2
 import bcrypt
 import jwt
 import datetime
@@ -11,10 +12,9 @@ CORS(app, origins=["https://www.figma.com", "https://figma.com"], supports_crede
 
 # ─── Config ───
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Neon connection string
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ─── Database Pool ───
-# Neon requires SSL, so we parse the connection string carefully
 conn_pool = psycopg2.pool.ThreadedConnectionPool(
     minconn=1,
     maxconn=10,
@@ -27,6 +27,48 @@ def get_db():
 
 def release_db(conn):
     conn_pool.putconn(conn)
+
+# ─── Auto-create tables on startup ───
+def init_db():
+    """Create tables if they don't exist."""
+    conn = None
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                figma_file_key VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        conn.commit()
+        cur.close()
+        print("[init_db] Tables created successfully (or already exist).")
+    except Exception as e:
+        print(f"[init_db] Error: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            release_db(conn)
+
+# Run init on startup
+init_db()
 
 # ─── Auth Middleware ───
 def token_required(f):
@@ -52,17 +94,17 @@ def register():
     data = request.get_json()
     email = data.get("email")
     password = data.get("password")
-    
+
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
-    
+
     conn = get_db()
     try:
         cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
             return jsonify({"error": "User exists"}), 409
-        
+
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         cur.execute(
             "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
@@ -70,7 +112,7 @@ def register():
         )
         user_id = cur.fetchone()[0]
         conn.commit()
-        
+
         token = jwt.encode(
             {"user_id": user_id, "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)},
             JWT_SECRET,
@@ -85,7 +127,7 @@ def login():
     data = request.get_json()
     email = data.get("email")
     password = data.get("password")
-    
+
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -93,7 +135,7 @@ def login():
         row = cur.fetchone()
         if not row or not bcrypt.checkpw(password.encode(), row[1].encode()):
             return jsonify({"error": "Invalid credentials"}), 401
-        
+
         token = jwt.encode(
             {"user_id": row[0], "exp": datetime.datetime.utcnow() + datetime.timedelta(days=7)},
             JWT_SECRET,
@@ -127,11 +169,11 @@ def create_task():
     data = request.get_json()
     title = data.get("title")
     description = data.get("description", "")
-    figma_file_key = data.get("figma_file_key")  # Optional: link to Figma file
-    
+    figma_file_key = data.get("figma_file_key")
+
     if not title:
         return jsonify({"error": "Title required"}), 400
-    
+
     conn = get_db()
     try:
         cur = conn.cursor()
@@ -160,7 +202,6 @@ def delete_task(task_id):
     finally:
         release_db(conn)
 
-# ─── Health Check ───
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
