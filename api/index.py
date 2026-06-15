@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask import Flask, request, jsonify, make_response
 import psycopg2.pool
 import psycopg2
 import bcrypt
@@ -8,13 +7,48 @@ import datetime
 import os
 
 app = Flask(__name__)
-CORS(app, origins=["https://www.figma.com", "https://figma.com"], supports_credentials=True)
 
-# ─── Config ───
+# ───────────────────────────────────────────────
+# FIXED CORS — handles Figma's null origin
+# ───────────────────────────────────────────────
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    # Figma plugin iframe sends Origin: null
+    # Figma Site sends the actual domain
+    allowed_origins = [
+        'null',
+        'https://www.figma.com',
+        'https://figma.com',
+        'https://close-crumb-37448559.figma.site'
+    ]
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = '*'
+
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Vary'] = 'Origin'
+    return response
+
+# Handle CORS preflight (OPTIONS) for ALL API routes
+@app.route('/api/<path:path>', methods=['OPTIONS'])
+@app.route('/api/', methods=['OPTIONS'])
+@app.route('/api', methods=['OPTIONS'])
+def handle_options(path=None):
+    return make_response('', 204)
+
+# ───────────────────────────────────────────────
+# Config
+# ───────────────────────────────────────────────
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-me")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# ─── Database Pool ───
+# ───────────────────────────────────────────────
+# Database Pool
+# ───────────────────────────────────────────────
 conn_pool = psycopg2.pool.ThreadedConnectionPool(
     minconn=1,
     maxconn=10,
@@ -28,7 +62,9 @@ def get_db():
 def release_db(conn):
     conn_pool.putconn(conn)
 
-# ─── Auto-create tables on startup ───
+# ───────────────────────────────────────────────
+# Auto-create tables on startup
+# ───────────────────────────────────────────────
 def init_db():
     """Create tables if they don't exist."""
     conn = None
@@ -67,10 +103,11 @@ def init_db():
         if conn:
             release_db(conn)
 
-# Run init on startup
 init_db()
 
-# ─── Auth Middleware ───
+# ───────────────────────────────────────────────
+# Auth Middleware
+# ───────────────────────────────────────────────
 def token_required(f):
     def decorator(*args, **kwargs):
         token = request.headers.get("Authorization")
@@ -87,7 +124,9 @@ def token_required(f):
     decorator.__name__ = f.__name__
     return decorator
 
-# ─── Routes ───
+# ───────────────────────────────────────────────
+# Routes
+# ───────────────────────────────────────────────
 
 @app.route("/api/auth/register", methods=["POST"])
 def register():
@@ -206,6 +245,8 @@ def delete_task(task_id):
 def health():
     return jsonify({"status": "ok"})
 
+# ───────────────────────────────────────────────
 # Vercel serverless handler
+# ───────────────────────────────────────────────
 def handler(request, **kwargs):
     return app(request.environ, lambda s, h: None)
