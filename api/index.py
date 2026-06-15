@@ -20,7 +20,8 @@ def after_request(response):
         'null',
         'https://www.figma.com',
         'https://figma.com',
-        'https://close-crumb-37448559.figma.site'
+        'https://close-crumb-37448559.figma.site',
+        'https://figma-test-baby.vercel.app'
     ]
     if origin in allowed_origins:
         response.headers['Access-Control-Allow-Origin'] = origin
